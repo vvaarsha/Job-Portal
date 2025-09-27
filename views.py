@@ -1,100 +1,330 @@
-from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth.forms import UserCreationForm
-from django.contrib.auth.decorators import login_required
-from django.contrib.auth import login
-from django.contrib import messages
-from .models import Job, SavedJob, JobAlert  # Ensure Job, SavedJob, and JobAlert models exist in models.py
-from django.http import JsonResponse, HttpResponse
-from django.utils import timezone
+from django.shortcuts import render, redirect
+from . models import *
+from django.contrib.auth.models import User
+from django.contrib.auth import authenticate, login, logout
+from datetime import date
 
-def home(request):
-    jobs = Job.objects.all()  # Fetch all jobs from the database
-    return render(request, 'jobs/home.html')  # Render the home page template
+def index(request):
+    return render(request, "index.html")
 
-
-
-def register(request):
-    """Handles user registration."""
-    if request.method == 'POST':
-        form = UserCreationForm(request.POST)
-        if form.is_valid():
-            user = form.save()
-            login(request, user)  # Log the user in after registration
-            messages.success(request, "Registration successful!")
-            return redirect('job_list')  # Redirect to job listings after registration
-        else:
-            messages.error(request, "Please correct the error below.")
+def user_login(request):
+    if request.user.is_authenticated:
+        return redirect("/")
     else:
-        form = UserCreationForm()
-    
-    return render(request, 'registration/register.html', {'form': form})
+        if request.method == "POST":
+            username = request.POST['username']
+            password = request.POST['password']
+            user = authenticate(username=username, password=password)
 
-@login_required
-def job_list(request):
-    # Retrieve all jobs initially
-    jobs = Job.objects.all().order_by('-date_posted')  # Ensure `date_posted` exists in the Job model
+            if user is not None:
+                user1 = Applicant.objects.get(user=user)
+                if user1.type == "applicant":
+                    login(request, user)
+                    return redirect("/user_homepage")
+            else:
+                thank = True
+                return render(request, "user_login.html", {"thank":thank})
+    return render(request, "user_login.html")
 
-    # Get search query and filter parameters from the request
-    title_query = request.GET.get('title', '')
-    location_query = request.GET.get('location', '')
-    job_type_query = request.GET.get('job_type', '')
+def user_homepage(request):
+    if not request.user.is_authenticated:
+        return redirect('/user_login/')
+    applicant = Applicant.objects.get(user=request.user)
+    if request.method=="POST":   
+        email = request.POST['email']
+        first_name=request.POST['first_name']
+        last_name=request.POST['last_name']
+        phone = request.POST['phone']
+        gender = request.POST['gender']
 
-    # Filter jobs based on user input
-    if title_query:
-        jobs = jobs.filter(title__icontains=title_query)  # Case-insensitive search for title
-    if location_query:
-        jobs = jobs.filter(location__icontains=location_query)  # Case-insensitive search for location
-    if job_type_query:
-        jobs = jobs.filter(job_type=job_type_query)  # Exact match for job type
+        applicant.user.email = email
+        applicant.user.first_name = first_name
+        applicant.user.last_name = last_name
+        applicant.phone = phone
+        applicant.gender = gender
+        applicant.save()
+        applicant.user.save()
 
-    # Pass the filtered jobs and query data to the template
-    return render(request, 'jobs/job_list.html', {
-        'jobs': jobs,
-        'title_query': title_query,
-        'location_query': location_query,
-        'job_type_query': job_type_query,
-    })
+        try:
+            image = request.FILES['image']
+            applicant.image = image
+            applicant.save()
+        except:
+            pass
+        alert = True
+        return render(request, "user_homepage.html", {'alert':alert})
+    return render(request, "user_homepage.html", {'applicant':applicant})
 
-@login_required
-def job_detail(request, job_id):
-    """Displays the details of a specific job. Requires login."""
-    job = get_object_or_404(Job, id=job_id)  # Fetch the job by ID
-    return render(request, 'jobs/job_detail.html', {'job': job})
+def all_jobs(request):
+    jobs = Job.objects.all().order_by('-start_date')
+    applicant = Applicant.objects.get(user=request.user)
+    apply = Application.objects.filter(applicant=applicant)
+    data = []
+    for i in apply:
+        data.append(i.job.id)
+    return render(request, "all_jobs.html", {'jobs':jobs, 'data':data})
 
-@login_required
-def save_job(request, job_id):
-    """Allows a logged-in user to save a job."""
-    job = get_object_or_404(Job, id=job_id)
-    saved_job, created = SavedJob.objects.get_or_create(user=request.user, job=job)
-    return JsonResponse({
-        'saved': created,
-        'message': "Job saved successfully" if created else "Job was already saved"
-    })
+def job_detail(request, myid):
+    job = Job.objects.get(id=myid)
+    return render(request, "job_detail.html", {'job':job})
 
-@login_required
-def create_alert(request):
-    """Handles creation of job alerts for logged-in users."""
+def job_apply(request, myid):
+    if not request.user.is_authenticated:
+        return redirect("/user_login")
+    applicant = Applicant.objects.get(user=request.user)
+    job = Job.objects.get(id=myid)
+    date1 = date.today()
+    if job.end_date < date1:
+        closed=True
+        return render(request, "job_apply.html", {'closed':closed})
+    elif job.start_date > date1:
+        notopen=True
+        return render(request, "job_apply.html", {'notopen':notopen})
+    else:
+        if request.method == "POST":
+            resume = request.FILES['resume']
+            Application.objects.create(job=job, company=job.company, applicant=applicant, resume=resume, apply_date=date.today())
+            alert=True
+            return render(request, "job_apply.html", {'alert':alert})
+    return render(request, "job_apply.html", {'job':job})
+
+def all_applicants(request):
+    company = Company.objects.get(user=request.user)
+    application = Application.objects.filter(company=company)
+    return render(request, "all_applicants.html", {'application':application})
+
+def signup(request):
+    if request.method=="POST":   
+        username = request.POST['email']
+        first_name=request.POST['first_name']
+        last_name=request.POST['last_name']
+        password1 = request.POST['password1']
+        password2 = request.POST['password2']
+        phone = request.POST['phone']
+        gender = request.POST['gender']
+        image = request.FILES['image']
+
+        if password1 != password2:
+            messages.error(request, "Passwords do not match.")
+            return redirect('/signup')
+        
+        user = User.objects.create_user(first_name=first_name, last_name=last_name, username=username, password=password1)
+        applicants = Applicant.objects.create(user=user, phone=phone, gender=gender, image=image, type="applicant")
+        user.save()
+        applicants.save()
+        return render(request, "user_login.html")
+    return render(request, "signup.html")
+
+def company_signup(request):
+    if request.method=="POST":   
+        username = request.POST['username']
+        email = request.POST['email']
+        first_name=request.POST['first_name']
+        last_name=request.POST['last_name']
+        password1 = request.POST['password1']
+        password2 = request.POST['password2']
+        phone = request.POST['phone']
+        gender = request.POST['gender']
+        image = request.FILES['image']
+        company_name = request.POST['company_name']
+
+        if password1 != password2:
+            messages.error(request, "Passwords do not match.")
+            return redirect('/signup')
+        
+        user = User.objects.create_user(first_name=first_name, last_name=last_name, email=email, username=username, password=password1)
+        company = Company.objects.create(user=user, phone=phone, gender=gender, image=image, company_name=company_name, type="company", status="pending")
+        user.save()
+        company.save()
+        return render(request, "company_login.html")
+    return render(request, "company_signup.html")
+
+def company_login(request):
     if request.method == "POST":
-        keyword = request.POST.get("keyword", "").strip()
-        location = request.POST.get("location", "").strip()
+        username = request.POST['username']
+        password = request.POST['password']
+        user = authenticate(username=username, password=password)
 
-        if not keyword or not location:
-            return JsonResponse({'created': False, 'error': 'Keyword and location are required.'})
+        if user is not None:
+            user1 = Company.objects.get(user=user)
+            if user1.type == "company" and user1.status != "pending":
+                login(request, user)
+                return redirect("/company_homepage")
+        else:
+            alert = True
+            return render(request, "company_login.html", {"alert":alert})
+    return render(request, "company_login.html")
 
-        alert, created = JobAlert.objects.get_or_create(
-            user=request.user, keyword=keyword, location=location
-        )
-        return JsonResponse({'created': created})
-    else:
-        return JsonResponse({'error': 'Invalid request method.'}, status=405)
+def company_homepage(request):
+    if not request.user.is_authenticated:
+        return redirect("/company_login")
+    company = Company.objects.get(user=request.user)
+    if request.method=="POST":   
+        email = request.POST['email']
+        first_name=request.POST['first_name']
+        last_name=request.POST['last_name']
+        phone = request.POST['phone']
+        gender = request.POST['gender']
 
-@login_required
-def job_alerts(request):
-    alerts = JobAlert.objects.filter(user=request.user)
-    return render(request, 'jobs/job_alerts.html', {'alerts': alerts})
+        company.user.email = email
+        company.user.first_name = first_name
+        company.user.last_name = last_name
+        company.phone = phone
+        company.gender = gender
+        company.save()
+        company.user.save()
 
-from django.shortcuts import render
+        try:
+            image = request.FILES['image']
+            company.image = image
+            company.save()
+        except:
+            pass
+        alert = True
+        return render(request, "company_homepage.html", {'alert':alert})
+    return render(request, "company_homepage.html", {'company':company})
 
-def user_dashboard(request):
-    # Add context if necessary
-    return render(request, 'jobs/user_dashboard.html')  # Make sure this template path is correct
+def add_job(request):
+    if not request.user.is_authenticated:
+        return redirect("/company_login")
+    if request.method == "POST":
+        title = request.POST['job_title']
+        start_date = request.POST['start_date']
+        end_date = request.POST['end_date']
+        salary = request.POST['salary']
+        experience = request.POST['experience']
+        location = request.POST['location']
+        skills = request.POST['skills']
+        description = request.POST['description']
+        user = request.user
+        company = Company.objects.get(user=user)
+        job = Job.objects.create(company=company, title=title,start_date=start_date, end_date=end_date, salary=salary, image=company.image, experience=experience, location=location, skills=skills, description=description, creation_date=date.today())
+        job.save()
+        alert = True
+        return render(request, "add_job.html", {'alert':alert})
+    return render(request, "add_job.html")
+
+def job_list(request):
+    if not request.user.is_authenticated:
+        return redirect("/company_login")
+    companies = Company.objects.get(user=request.user)
+    jobs = Job.objects.filter(company=companies)
+    return render(request, "job_list.html", {'jobs':jobs})
+
+def edit_job(request, myid):
+    if not request.user.is_authenticated:
+        return redirect("/company_login")
+    job = Job.objects.get(id=myid)
+    if request.method == "POST":
+        title = request.POST['job_title']
+        start_date = request.POST['start_date']
+        end_date = request.POST['end_date']
+        salary = request.POST['salary']
+        experience = request.POST['experience']
+        location = request.POST['location']
+        skills = request.POST['skills']
+        description = request.POST['description']
+
+        job.title = title
+        job.salary = salary
+        job.experience = experience
+        job.location = location
+        job.skills = skills
+        job.description = description
+
+        job.save()
+        if start_date:
+            job.start_date = start_date
+            job.save()
+        if end_date:
+            job.end_date = end_date
+            job.save()
+        alert = True
+        return render(request, "edit_job.html", {'alert':alert})
+    return render(request, "edit_job.html", {'job':job})
+
+def company_logo(request, myid):
+    if not request.user.is_authenticated:
+        return redirect("/company_login")
+    job = Job.objects.get(id=myid)
+    if request.method == "POST":
+        image = request.FILES['logo']
+        job.image = image 
+        job.save()
+        alert = True
+        return render(request, "company_logo.html", {'alert':alert})
+    return render(request, "company_logo.html", {'job':job})
+
+def Logout(request):
+    logout(request)
+    return redirect('/')
+
+def admin_login(request):
+    if request.method == "POST":
+        username = request.POST['username']
+        password = request.POST['password']
+        user = authenticate(username=username, password=password)
+
+        if user.is_superuser:
+            login(request, user)
+            return redirect("/all_companies")
+        else:
+            alert = True
+            return render(request, "admin_login.html", {"alert":alert})
+    return render(request, "admin_login.html")
+
+def view_applicants(request):
+    if not request.user.is_authenticated:
+        return redirect("/admin_login")
+    applicants = Applicant.objects.all()
+    return render(request, "view_applicants.html", {'applicants':applicants})
+
+def delete_applicant(request, myid):
+    if not request.user.is_authenticated:
+        return redirect("/admin_login")
+    applicant = User.objects.filter(id=myid)
+    applicant.delete()
+    return redirect("/view_applicants")
+
+def pending_companies(request):
+    if not request.user.is_authenticated:
+        return redirect("/admin_login")
+    companies = Company.objects.filter(status="pending")
+    return render(request, "pending_companies.html", {'companies':companies})
+
+def change_status(request, myid):
+    if not request.user.is_authenticated:
+        return redirect("/admin_login")
+    company = Company.objects.get(id=myid)
+    if request.method == "POST":
+        status = request.POST['status']
+        company.status=status
+        company.save()
+        alert = True
+        return render(request, "change_status.html", {'alert':alert})
+    return render(request, "change_status.html", {'company':company})
+
+def accepted_companies(request):
+    if not request.user.is_authenticated:
+        return redirect("/admin_login")
+    companies = Company.objects.filter(status="Accepted")
+    return render(request, "accepted_companies.html", {'companies':companies})
+
+def rejected_companies(request):
+    if not request.user.is_authenticated:
+        return redirect("/admin_login")
+    companies = Company.objects.filter(status="Rejected")
+    return render(request, "rejected_companies.html", {'companies':companies})
+
+def all_companies(request):
+    if not request.user.is_authenticated:
+        return redirect("/admin_login")
+    companies = Company.objects.all()
+    return render(request, "all_companies.html", {'companies':companies})
+
+def delete_company(request, myid):
+    if not request.user.is_authenticated:
+        return redirect("/admin_login")
+    company = User.objects.filter(id=myid)
+    company.delete()
+    return redirect("/all_companies")
